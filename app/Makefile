@@ -3,11 +3,13 @@ SGX_MODE ?= HW
 #SGX_MODE ?= SIMULATION_MODE
 SGX_PRERELEASE ?=1
 
+include Makefile.in
+
 CC = gcc
 CXX = g++
 ENCLVNAME = EnclavedLua
 LUADIR = ../lua-sgx
-SGXCOMMONDIR = ../../sgx_common
+SGXCOMMONDIR = sgx_common
 UNTRUSTED_DIR = untrusted
 TRUSTED_DIR = trusted
 UNTRLUADIR = ../lua-5.3.2
@@ -42,13 +44,13 @@ endif
 
 App_Cpp_Flags := $(App_C_Flags) -std=c++11 -I$(UNTRLUADIR)/src
 Trusted_IncPaths := $(addprefix -I, $(LUADIR)/src $(SGX_SDK)/include/tlibc \
-                                 $(SGX_SDK)/include $(TRUSTED_DIR)\
-                                 /usr/include/x86_64-linux-gnu/)
+                                 $(SGX_SDK)/include $(TRUSTED_DIR) \
+                                 $(SGXCOMMONDIR)/enclave_include/)
 
 Flags_Just_For_C := -Wno-implicit-function-declaration -std=c11
 Common_C_Cpp_Flags := $(SGX_COMMON_CFLAGS) -nostdinc -fvisibility=hidden -fpie -fstack-protector $(Trusted_IncPaths) -fno-builtin-printf -I.
 C_Flags := $(Flags_Just_For_C) $(Common_C_Cpp_Flags)
-Cpp_Flags := $(Common_C_Cpp_Flags) -I$(SGX_SDK)/include/stlport -std=c++11 -nostdinc++  
+Cpp_Flags := -DENCLAVED $(Common_C_Cpp_Flags) -I$(SGX_SDK)/include/stlport -std=c++11 -nostdinc++  
 
 App_Link_Flags := $(SGX_COMMON_CFLAGS) -L$(SGX_LIBRARY_PATH) -lcryptopp -Wl,-E -ldl
 
@@ -69,7 +71,7 @@ Crypto_Library_Name := sgx_tcrypto
 
 Trusted_Link_Flags := $(SGX_COMMON_CFLAGS) -Wl,--no-undefined -nostdlib \
     -nodefaultlibs -nostartfiles -L$(SGX_LIBRARY_PATH) -L$(LUADIR)/bin \
-    -Wl,--whole-archive -l$(Trts_Library_Name) -lsgx_tsetjmp -Wl,--no-whole-archive \
+    -Wl,--whole-archive -l$(Trts_Library_Name) -Wl,--no-whole-archive \
     -Wl,--start-group -lsgx_tstdc -lsgx_tstdcxx -l$(Crypto_Library_Name) \
     -l$(Service_Library_Name) -lluasgx -Wl,--end-group \
     -Wl,-Bstatic -Wl,-Bsymbolic -Wl,--no-undefined \
@@ -81,8 +83,8 @@ App_Cpp_Sources := $(UNTRUSTED_DIR)/lua_untrusted_proxy.cpp \
                    $(SGXCOMMONDIR)/sgx_errlist.cpp \
                    $(SGXCOMMONDIR)/sgx_initenclave.cpp \
                    $(UNTRUSTED_DIR)/lua.cpp \
-                   $(SGXCOMMONDIR)/crypto.cpp \
-                   $(SGXCOMMONDIR)/utils.cpp
+                   $(SGXCOMMONDIR)/sgx_cryptoall.cpp \
+                   $(SGXCOMMONDIR)/sgx_utils_rp.cpp
 App_C_Sources := $(UNTRUSTED_DIR)/$(ENCLVNAME)_u.c
 App_Objects = $(App_C_Sources:.c=.o) $(App_Cpp_Sources:.cpp=.o)
 
@@ -93,7 +95,7 @@ endif
 
 TrustedSources = $(addprefix $(TRUSTED_DIR)/, $(ENCLVNAME)_t.c) ../luacsv/csv.c
 TrustedCppSrcs = $(addprefix $(TRUSTED_DIR)/, $(ENCLVNAME).cpp)
-TrustedObjects = $(TrustedSources:.c=.o) $(TrustedCppSrcs:.cpp=.o)
+TrustedObjects = $(TrustedSources:.c=.o) $(TrustedCppSrcs:.cpp=.o) $(SGXCOMMONDIR)/sgx_cryptoall_t.o
 
 .PHONY: all clean luasgx 
 
@@ -111,12 +113,10 @@ $(UNTRLUADIR)/src/liblua.a:
 	@$(MAKE) -C $(UNTRLUADIR)/src linux 
 
 $(SGXCOMMONDIR)/%.o : $(SGXCOMMONDIR)/%.cpp
-	@$(CXX) $(App_Cpp_Flags) -c $< -o $@ 
-	@echo "CXX (App)\t<=\t$@" 
+	@$(call run_and_test, $(CXX) $(App_Cpp_Flags) -c $< -o $@, "CXX App")
 
 $(UNTRUSTED_DIR)/%.o : $(UNTRUSTED_DIR)/%.cpp
-	@$(CXX) $(App_Cpp_Flags) -c $< -o $@ 
-	@echo "CXX (App)\t<=\t$@" 
+	@$(call run_and_test, $(CXX) $(App_Cpp_Flags) -c $< -o $@, "CXX App")
 
 $(UNTRUSTED_DIR)/%_u.o : $(UNTRUSTED_DIR)/%_u.c
 	@$(CC) $(App_C_Flags) -c $< -o $@ 
@@ -128,16 +128,16 @@ $(UNTRUSTED_DIR)/%_u.o : $(UNTRUSTED_DIR)/%_u.c
 
 ############## TRUSTED #########################################################
 %.o : %.s
-	@$(CC) $(C_Flags) -c $< -o $@ 
-	@echo "CC (Enclave)\t<=\t$@" 
+	@$(call run_and_test, $(CC) $(C_Flags) -c $< -o $@, "ASM SGX") 
 
 %.o : %.c
-	@$(CC) $(C_Flags) -c $< -o $@ 
-	@echo "CC (Enclave)\t<=\t$@" 
+	@$(call run_and_test, $(CC) $(C_Flags) -c $< -o $@, "CC SGX")
 
 %.o : %.cpp
-	@$(CXX) $(Cpp_Flags) -c $< -o $@ 
-	@echo "CXX (Enclave)\t<=\t$@"
+	@$(call run_and_test, $(CXX) $(Cpp_Flags) -c $< -o $@, "CXX SGX")
+
+ $(SGXCOMMONDIR)/%_t.o :  $(SGXCOMMONDIR)/%.cpp
+	@$(call run_and_test, $(CXX) $(Cpp_Flags) -c $< -o $@, "CXX SGX")
 
 $(ENCLVNAME).so : $(TrustedObjects) $(LUADIR)/bin/libluasgx.a
 	$(CXX) $(filter-out %.a,$^) -o $@ $(Trusted_Link_Flags)

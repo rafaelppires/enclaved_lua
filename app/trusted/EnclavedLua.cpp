@@ -3,10 +3,12 @@
 #include <lualib.h>
 #include <string.h>
 #include <lua_parser.h>
-#include <sgx_utiles.h>
 #include <file_mock.h>
 #include <algorithm>
 #include <string>
+
+#define ENABLE_SGX
+#include <sgx_cryptoall.h>
 
 /* 
  * printf: 
@@ -92,8 +94,12 @@ static void stackDump (lua_State *L) {
 size_t ecall_execfunc( const char *ccode, size_t csz, const char *cdata, size_t dsz, char *buff, size_t len ) {
     char pcode[BUFSIZ], pdata[BUFSIZ];
     size_t cs, ds, result_size;
-    decrypt( ccode, pcode, cs = std::min(sizeof(pcode)-1,csz) );
-    decrypt( cdata, pdata, ds = std::min(sizeof(pdata)-1,dsz) );
+    uint8_t key[16], iv[16];
+    memset(key,0,16); memset(iv,0,16);
+    key[0] = 'a'; key[15] = '5';
+    iv[0] = 'x'; iv[15]= '?';
+    decrypt_aes( AES128, (const uint8_t*)ccode, (uint8_t*)pcode, cs = std::min(sizeof(pcode)-1,csz), key, iv );
+    decrypt_aes( AES128, (const uint8_t*)cdata, (uint8_t*)pdata, ds = std::min(sizeof(pdata)-1,dsz), key, iv );
     pcode[cs] = 0; pdata[ds] = 0;
     
     std::string c = std::string("x=") + pcode;
@@ -112,7 +118,7 @@ size_t ecall_execfunc( const char *ccode, size_t csz, const char *cdata, size_t 
         b.len = msg.size();
     }
 
-    encrypt( b.buff, buff, result_size = std::min(b.len,len) );
+    encrypt_aes( AES128, (const uint8_t*)b.buff, (uint8_t*)buff, result_size = std::min(b.len,len), key, iv );
     lua_settop(L,0);
     return result_size;
 }
